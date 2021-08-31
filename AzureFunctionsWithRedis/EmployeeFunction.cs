@@ -1,35 +1,70 @@
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Azure.WebJobs;
+using Microsoft.Azure.WebJobs.Extensions;
+using Microsoft.Azure.WebJobs.Extensions.Http;
+using Microsoft.CSharp.RuntimeBinder;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using System;
 using System.IO;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Azure.WebJobs;
-using Microsoft.Azure.WebJobs.Extensions.Http;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
+
 
 namespace AzureFunctionsWithRedis
 {
-    public static class EmployeeFunction
+    public class EmployeeFunction
     {
-        [FunctionName("EmployeeFunction")]
-        public static async Task<IActionResult> Run(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = null)] HttpRequest req,
-            ILogger log)
+
+        private readonly IDistributedCache _cache;
+        public EmployeeFunction(IDistributedCache cache)
         {
-            log.LogInformation("C# HTTP trigger function processed a request.");
+            this._cache = cache;
+        }
 
-            string name = req.Query["name"];
+        [FunctionName("GetEmployeeByID")]
+        public IActionResult GetEmployeeById([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "Employee/{Id}")] HttpRequest req,
+            ILogger log, string Id)
+        {
+            var employee = this._cache.GetString(Id);
+            if (employee == null)
+                return (IActionResult)new NotFoundResult();
+            return (IActionResult)new OkObjectResult(employee);
+        }
 
+        [FunctionName("CreateEmployee")]
+        public async Task<IActionResult> CreateEmployee([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "Employee")] HttpRequest req, ILogger log)
+        {
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-            dynamic data = JsonConvert.DeserializeObject(requestBody);
-            name = name ?? data?.name;
+            var emp = JsonConvert.DeserializeObject<Employee>(requestBody);
+            
+            if (string.IsNullOrEmpty(emp.Id)) return new BadRequestResult();
+            
+            if (SaveEmployee(emp))
+            {
+                return new OkObjectResult(emp);
+            }
+            else
+            {
+                return new BadRequestResult();
+            }
 
-            string responseMessage = string.IsNullOrEmpty(name)
-                ? "This HTTP triggered function executed successfully. Pass a name in the query string or in the request body for a personalized response."
-                : $"Hello, {name}. This HTTP triggered function executed successfully.";
+        }
 
-            return new OkObjectResult(responseMessage);
+        private bool SaveEmployee(Employee emp)
+        {
+            try
+            {
+                this._cache.SetString(emp.Id, JsonConvert.SerializeObject(emp));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
         }
     }
 }
+
